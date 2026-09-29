@@ -8,7 +8,8 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+import json
 
 
 ROOT_DIR = Path(__file__).parent
@@ -17,6 +18,8 @@ load_dotenv(ROOT_DIR / '.env')
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
+
+EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY', '')
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
@@ -29,17 +32,20 @@ class BillItem(BaseModel):
     month_key: str
     name: str
     amount: float
-    fraction: Optional[str] = None  # e.g. "3of6"
+    fraction: Optional[str] = None
     paid: bool = False
-    due_day: Optional[int] = None
+    due_date: Optional[str] = None  # ISO YYYY-MM-DD
+    recurrence: str = "none"  # none | weekly | biweekly | monthly
+    series_id: Optional[str] = None
+    category: str = "bill"  # bill | subscription | debt | living
 
 
 class Paycheck(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    month_key: str  # "2026-09"
+    month_key: str
     number: int
-    date_range: str  # "Sept 10 - Sept 16"
-    color_cycle: str  # cycleBlue / cyclePurple / cycleGreen / cycleYellow / cycleOrange
+    date_range: str
+    color_cycle: str
     total_cash: float
     vehicle_payment: float = 0
     targeted_payoffs: float = 0
@@ -48,37 +54,61 @@ class Paycheck(BaseModel):
     living_costs: float = 300
     savings_transfer: float = 0
     unallocated_buffer: float = 0
-    weekly_desired_spending: float = 0  # amount user actually spent this week
-    weekly_target_spending: float = 300  # default target
+    weekly_desired_spending: float = 0
+    weekly_target_spending: float = 300
     starting_cash: float = 0
+    start_date: Optional[str] = None  # ISO YYYY-MM-DD
+    end_date: Optional[str] = None    # ISO YYYY-MM-DD
 
 
 class Month(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    key: str  # "2026-09"
-    name: str  # "September 2026"
+    key: str
+    name: str
     year: int
     month: int
     starting_buffer: float = 0
     notes: str = ""
 
 
-class ToggleBillReq(BaseModel):
-    paid: bool
-
-
-class UpdatePaycheckSpendingReq(BaseModel):
-    weekly_desired_spending: Optional[float] = None
-    weekly_target_spending: Optional[float] = None
+class CreateBillReq(BaseModel):
+    paycheck_id: Optional[str] = None
+    month_key: str
+    name: str
+    amount: float
+    fraction: Optional[str] = None
+    due_date: Optional[str] = None
+    recurrence: str = "none"
+    category: str = "bill"
 
 
 class UpdateBillReq(BaseModel):
     name: Optional[str] = None
     amount: Optional[float] = None
     paid: Optional[bool] = None
+    due_date: Optional[str] = None
+    recurrence: Optional[str] = None
+    category: Optional[str] = None
+    paycheck_id: Optional[str] = None
 
 
-# ---------- Seed data ----------
+class GenerateRecurringReq(BaseModel):
+    name: str
+    amount: float
+    category: str = "bill"
+    recurrence: str  # weekly | biweekly | monthly
+    start_date: str  # ISO YYYY-MM-DD
+    occurrences: int = 12
+    fraction_prefix: bool = True  # write "1of12", "2of12" ...
+
+
+class UpdatePaycheckSpendingReq(BaseModel):
+    weekly_desired_spending: Optional[float] = None
+    weekly_target_spending: Optional[float] = None
+    savings_transfer: Optional[float] = None
+
+
+# ---------- Seed data (unchanged) ----------
 CYCLE_COLORS = ["cycleBlue", "cyclePurple", "cycleGreen", "cycleYellow", "cycleOrange"]
 
 
@@ -94,27 +124,23 @@ SEED_MONTHS = [
 ]
 
 SEED_PAYCHECKS = [
-    # September
-    {"month_key": "2026-09", "number": 1, "date_range": "Sept 10 – Sept 16", "total_cash": 1476, "vehicle_payment": 690, "targeted_payoffs": 649.40, "current_month_bills": 441.60, "living_costs": 300, "savings_transfer": 100, "unallocated_buffer": 168, "starting_cash": 705},
-    {"month_key": "2026-09", "number": 2, "date_range": "Sept 17 – Sept 23", "total_cash": 1300, "vehicle_payment": 690, "targeted_payoffs": 0, "current_month_bills": 706.88, "living_costs": 300, "savings_transfer": 200, "unallocated_buffer": 0},
-    {"month_key": "2026-09", "number": 3, "date_range": "Sept 24 – Sept 30", "total_cash": 1300, "vehicle_payment": 0, "targeted_payoffs": 629.55, "current_month_bills": 0, "living_costs": 300, "savings_transfer": 400, "unallocated_buffer": 206.5},
-    # October
-    {"month_key": "2026-10", "number": 1, "date_range": "Oct 1 – Oct 7", "total_cash": 1300, "vehicle_payment": 690, "targeted_payoffs": 0, "current_month_bills": 257.05, "living_costs": 300, "savings_transfer": 0, "unallocated_buffer": 200},
-    {"month_key": "2026-10", "number": 2, "date_range": "Oct 8 – Oct 14", "total_cash": 1300, "vehicle_payment": 0, "targeted_payoffs": 402.09, "current_month_bills": 0, "living_costs": 300, "savings_transfer": 200, "unallocated_buffer": 0},
-    {"month_key": "2026-10", "number": 3, "date_range": "Oct 15 – Oct 21", "total_cash": 1300, "vehicle_payment": 0, "targeted_payoffs": 493.56, "current_month_bills": 0, "living_costs": 300, "savings_transfer": 200, "unallocated_buffer": 0},
-    {"month_key": "2026-10", "number": 4, "date_range": "Oct 22 – Oct 28", "total_cash": 1300, "vehicle_payment": 0, "targeted_payoffs": 37.68, "current_month_bills": 550, "living_costs": 300, "savings_transfer": 200, "unallocated_buffer": 0},
-    {"month_key": "2026-10", "number": 5, "date_range": "Oct 29 – Oct 31", "total_cash": 1300, "vehicle_payment": 0, "targeted_payoffs": 0, "current_month_bills": 0, "living_costs": 300, "savings_transfer": 200, "unallocated_buffer": 800},
-    # November
-    {"month_key": "2026-11", "number": 1, "date_range": "Nov 5 – Nov 11", "total_cash": 1300, "vehicle_payment": 690, "targeted_payoffs": 0, "current_month_bills": 183.46, "living_costs": 300, "savings_transfer": 0, "unallocated_buffer": 126.54},
-    {"month_key": "2026-11", "number": 2, "date_range": "Nov 12 – Nov 18", "total_cash": 1300, "vehicle_payment": 0, "targeted_payoffs": 77.72, "current_month_bills": 0, "living_costs": 300, "savings_transfer": 400, "unallocated_buffer": 522.28},
-    {"month_key": "2026-11", "number": 3, "date_range": "Nov 19 – Nov 25", "total_cash": 1300, "vehicle_payment": 0, "targeted_payoffs": 475.5, "current_month_bills": 0, "living_costs": 300, "savings_transfer": 200, "unallocated_buffer": 324.5},
-    {"month_key": "2026-11", "number": 4, "date_range": "Nov 26 – Dec 2", "total_cash": 1300, "vehicle_payment": 0, "targeted_payoffs": 176.4, "current_month_bills": 200, "living_costs": 300, "savings_transfer": 200, "unallocated_buffer": 423.6},
-    # December
-    {"month_key": "2026-12", "number": 1, "date_range": "Dec 3 – Dec 9", "total_cash": 1300, "vehicle_payment": 0, "targeted_payoffs": 624.9, "current_month_bills": 0, "living_costs": 300, "savings_transfer": 200, "unallocated_buffer": 175.1},
-    {"month_key": "2026-12", "number": 2, "date_range": "Dec 10 – Dec 16", "total_cash": 1300, "vehicle_payment": 690, "targeted_payoffs": 0, "current_month_bills": 108.56, "living_costs": 300, "savings_transfer": 0, "unallocated_buffer": 201.44},
-    {"month_key": "2026-12", "number": 3, "date_range": "Dec 17 – Dec 23", "total_cash": 1300, "vehicle_payment": 0, "targeted_payoffs": 475.5, "current_month_bills": 0, "living_costs": 300, "savings_transfer": 200, "unallocated_buffer": 324.5},
-    {"month_key": "2026-12", "number": 4, "date_range": "Dec 24 – Dec 30", "total_cash": 1300, "vehicle_payment": 0, "targeted_payoffs": 103.55, "current_month_bills": 0, "living_costs": 300, "savings_transfer": 400, "unallocated_buffer": 496.45},
-    {"month_key": "2026-12", "number": 5, "date_range": "Dec 31 – Jan 6", "total_cash": 1300, "vehicle_payment": 0, "targeted_payoffs": 37.68, "current_month_bills": 550, "living_costs": 300, "savings_transfer": 200, "unallocated_buffer": 212.32},
+    {"month_key": "2026-09", "number": 1, "date_range": "Sept 10 – Sept 16", "start_date": "2026-09-10", "end_date": "2026-09-16", "total_cash": 1476, "vehicle_payment": 690, "targeted_payoffs": 649.40, "current_month_bills": 441.60, "living_costs": 300, "savings_transfer": 100, "unallocated_buffer": 168, "starting_cash": 705},
+    {"month_key": "2026-09", "number": 2, "date_range": "Sept 17 – Sept 23", "start_date": "2026-09-17", "end_date": "2026-09-23", "total_cash": 1300, "vehicle_payment": 690, "targeted_payoffs": 0, "current_month_bills": 706.88, "living_costs": 300, "savings_transfer": 200, "unallocated_buffer": 0},
+    {"month_key": "2026-09", "number": 3, "date_range": "Sept 24 – Sept 30", "start_date": "2026-09-24", "end_date": "2026-09-30", "total_cash": 1300, "vehicle_payment": 0, "targeted_payoffs": 629.55, "current_month_bills": 0, "living_costs": 300, "savings_transfer": 400, "unallocated_buffer": 206.5},
+    {"month_key": "2026-10", "number": 1, "date_range": "Oct 1 – Oct 7", "start_date": "2026-10-01", "end_date": "2026-10-07", "total_cash": 1300, "vehicle_payment": 690, "targeted_payoffs": 0, "current_month_bills": 257.05, "living_costs": 300, "savings_transfer": 0, "unallocated_buffer": 200},
+    {"month_key": "2026-10", "number": 2, "date_range": "Oct 8 – Oct 14", "start_date": "2026-10-08", "end_date": "2026-10-14", "total_cash": 1300, "vehicle_payment": 0, "targeted_payoffs": 402.09, "current_month_bills": 0, "living_costs": 300, "savings_transfer": 200, "unallocated_buffer": 0},
+    {"month_key": "2026-10", "number": 3, "date_range": "Oct 15 – Oct 21", "start_date": "2026-10-15", "end_date": "2026-10-21", "total_cash": 1300, "vehicle_payment": 0, "targeted_payoffs": 493.56, "current_month_bills": 0, "living_costs": 300, "savings_transfer": 200, "unallocated_buffer": 0},
+    {"month_key": "2026-10", "number": 4, "date_range": "Oct 22 – Oct 28", "start_date": "2026-10-22", "end_date": "2026-10-28", "total_cash": 1300, "vehicle_payment": 0, "targeted_payoffs": 37.68, "current_month_bills": 550, "living_costs": 300, "savings_transfer": 200, "unallocated_buffer": 0},
+    {"month_key": "2026-10", "number": 5, "date_range": "Oct 29 – Oct 31", "start_date": "2026-10-29", "end_date": "2026-10-31", "total_cash": 1300, "vehicle_payment": 0, "targeted_payoffs": 0, "current_month_bills": 0, "living_costs": 300, "savings_transfer": 200, "unallocated_buffer": 800},
+    {"month_key": "2026-11", "number": 1, "date_range": "Nov 5 – Nov 11", "start_date": "2026-11-05", "end_date": "2026-11-11", "total_cash": 1300, "vehicle_payment": 690, "targeted_payoffs": 0, "current_month_bills": 183.46, "living_costs": 300, "savings_transfer": 0, "unallocated_buffer": 126.54},
+    {"month_key": "2026-11", "number": 2, "date_range": "Nov 12 – Nov 18", "start_date": "2026-11-12", "end_date": "2026-11-18", "total_cash": 1300, "vehicle_payment": 0, "targeted_payoffs": 77.72, "current_month_bills": 0, "living_costs": 300, "savings_transfer": 400, "unallocated_buffer": 522.28},
+    {"month_key": "2026-11", "number": 3, "date_range": "Nov 19 – Nov 25", "start_date": "2026-11-19", "end_date": "2026-11-25", "total_cash": 1300, "vehicle_payment": 0, "targeted_payoffs": 475.5, "current_month_bills": 0, "living_costs": 300, "savings_transfer": 200, "unallocated_buffer": 324.5},
+    {"month_key": "2026-11", "number": 4, "date_range": "Nov 26 – Dec 2", "start_date": "2026-11-26", "end_date": "2026-12-02", "total_cash": 1300, "vehicle_payment": 0, "targeted_payoffs": 176.4, "current_month_bills": 200, "living_costs": 300, "savings_transfer": 200, "unallocated_buffer": 423.6},
+    {"month_key": "2026-12", "number": 1, "date_range": "Dec 3 – Dec 9", "start_date": "2026-12-03", "end_date": "2026-12-09", "total_cash": 1300, "vehicle_payment": 0, "targeted_payoffs": 624.9, "current_month_bills": 0, "living_costs": 300, "savings_transfer": 200, "unallocated_buffer": 175.1},
+    {"month_key": "2026-12", "number": 2, "date_range": "Dec 10 – Dec 16", "start_date": "2026-12-10", "end_date": "2026-12-16", "total_cash": 1300, "vehicle_payment": 690, "targeted_payoffs": 0, "current_month_bills": 108.56, "living_costs": 300, "savings_transfer": 0, "unallocated_buffer": 201.44},
+    {"month_key": "2026-12", "number": 3, "date_range": "Dec 17 – Dec 23", "start_date": "2026-12-17", "end_date": "2026-12-23", "total_cash": 1300, "vehicle_payment": 0, "targeted_payoffs": 475.5, "current_month_bills": 0, "living_costs": 300, "savings_transfer": 200, "unallocated_buffer": 324.5},
+    {"month_key": "2026-12", "number": 4, "date_range": "Dec 24 – Dec 30", "start_date": "2026-12-24", "end_date": "2026-12-30", "total_cash": 1300, "vehicle_payment": 0, "targeted_payoffs": 103.55, "current_month_bills": 0, "living_costs": 300, "savings_transfer": 400, "unallocated_buffer": 496.45},
+    {"month_key": "2026-12", "number": 5, "date_range": "Dec 31 – Jan 6", "start_date": "2026-12-31", "end_date": "2027-01-06", "total_cash": 1300, "vehicle_payment": 0, "targeted_payoffs": 37.68, "current_month_bills": 550, "living_costs": 300, "savings_transfer": 200, "unallocated_buffer": 212.32},
 ]
 
 SEED_BILLS_BY_PAYCHECK = {
@@ -196,6 +222,43 @@ SEED_BILLS_BY_PAYCHECK = {
 }
 
 
+# ---------- Helpers ----------
+def _month_key_from_date(d: datetime) -> str:
+    return f"{d.year:04d}-{d.month:02d}"
+
+
+async def _find_paycheck_for_date(due: datetime) -> Optional[dict]:
+    """Return the paycheck whose start_date <= due <= end_date. Fallback: same month_key first."""
+    iso = due.strftime("%Y-%m-%d")
+    pc = await db.paychecks.find_one(
+        {"start_date": {"$lte": iso}, "end_date": {"$gte": iso}},
+        {"_id": 0},
+    )
+    if pc:
+        return pc
+    mkey = _month_key_from_date(due)
+    return await db.paychecks.find_one({"month_key": mkey}, {"_id": 0}, sort=[("number", 1)])
+
+
+def _add_recurrence(d: datetime, recurrence: str, i: int) -> datetime:
+    if recurrence == "weekly":
+        return d + timedelta(days=7 * i)
+    if recurrence == "biweekly":
+        return d + timedelta(days=14 * i)
+    if recurrence == "monthly":
+        y = d.year + (d.month - 1 + i) // 12
+        m = (d.month - 1 + i) % 12 + 1
+        # clamp day
+        try:
+            return d.replace(year=y, month=m)
+        except ValueError:
+            # end-of-month clamp
+            import calendar
+            last = calendar.monthrange(y, m)[1]
+            return d.replace(year=y, month=m, day=min(d.day, last))
+    return d
+
+
 # ---------- Routes ----------
 @api_router.get("/")
 async def root():
@@ -204,7 +267,6 @@ async def root():
 
 @api_router.post("/seed")
 async def seed_data(force: bool = False):
-    """Seed Sept-Dec 2026 data from workbook. Idempotent unless force=True."""
     existing = await db.months.count_documents({})
     if existing > 0 and not force:
         return {"seeded": False, "reason": "already seeded", "months": existing}
@@ -214,21 +276,15 @@ async def seed_data(force: bool = False):
         await db.paychecks.delete_many({})
         await db.bills.delete_many({})
 
-    # Insert months
     months_docs = [Month(**m).model_dump() for m in SEED_MONTHS]
     await db.months.insert_many([{**d} for d in months_docs])
 
-    # Insert paychecks with cycle colors
     paycheck_docs = []
     for p in SEED_PAYCHECKS:
-        pc = Paycheck(
-            **p,
-            color_cycle=_cycle(p["number"]),
-        )
+        pc = Paycheck(**p, color_cycle=_cycle(p["number"]))
         paycheck_docs.append(pc.model_dump())
     await db.paychecks.insert_many([{**d} for d in paycheck_docs])
 
-    # Insert bills - lookup paycheck by month_key + number
     bill_docs = []
     for (mkey, num), items in SEED_BILLS_BY_PAYCHECK.items():
         matching = next((pc for pc in paycheck_docs if pc["month_key"] == mkey and pc["number"] == num), None)
@@ -293,7 +349,7 @@ async def get_paycheck(paycheck_id: str):
     pc = await db.paychecks.find_one({"id": paycheck_id}, {"_id": 0})
     if not pc:
         raise HTTPException(404, "Paycheck not found")
-    bills = await db.bills.find({"paycheck_id": paycheck_id}, {"_id": 0}).to_list(200)
+    bills = await db.bills.find({"paycheck_id": paycheck_id}, {"_id": 0}).sort("due_date", 1).to_list(200)
     return {**pc, "bills": bills}
 
 
@@ -309,6 +365,52 @@ async def update_paycheck(paycheck_id: str, req: UpdatePaycheckSpendingReq):
     return pc
 
 
+# ---------- Bills CRUD ----------
+@api_router.get("/bills")
+async def list_bills(month_key: Optional[str] = None, paycheck_id: Optional[str] = None):
+    q: dict = {}
+    if month_key:
+        q["month_key"] = month_key
+    if paycheck_id:
+        q["paycheck_id"] = paycheck_id
+    bills = await db.bills.find(q, {"_id": 0}).to_list(2000)
+    return bills
+
+
+@api_router.post("/bills")
+async def create_bill(req: CreateBillReq):
+    paycheck_id = req.paycheck_id
+    if not paycheck_id and req.due_date:
+        try:
+            d = datetime.strptime(req.due_date, "%Y-%m-%d")
+            pc = await _find_paycheck_for_date(d)
+            if pc:
+                paycheck_id = pc["id"]
+        except ValueError:
+            pass
+    if not paycheck_id:
+        # fallback: first paycheck of the month_key
+        pc = await db.paychecks.find_one({"month_key": req.month_key}, {"_id": 0}, sort=[("number", 1)])
+        if pc:
+            paycheck_id = pc["id"]
+    if not paycheck_id:
+        raise HTTPException(400, "Cannot resolve paycheck for bill")
+
+    b = BillItem(
+        paycheck_id=paycheck_id,
+        month_key=req.month_key,
+        name=req.name,
+        amount=req.amount,
+        fraction=req.fraction,
+        due_date=req.due_date,
+        recurrence=req.recurrence,
+        category=req.category,
+    )
+    doc = b.model_dump()
+    await db.bills.insert_one({**doc})
+    return doc
+
+
 @api_router.patch("/bills/{bill_id}")
 async def update_bill(bill_id: str, req: UpdateBillReq):
     updates = {k: v for k, v in req.model_dump().items() if v is not None}
@@ -321,9 +423,73 @@ async def update_bill(bill_id: str, req: UpdateBillReq):
     return b
 
 
+@api_router.delete("/bills/{bill_id}")
+async def delete_bill(bill_id: str):
+    result = await db.bills.delete_one({"id": bill_id})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Bill not found")
+    return {"deleted": True}
+
+
+@api_router.post("/bills/generate")
+async def generate_recurring(req: GenerateRecurringReq):
+    """Create N occurrences of a bill at the specified cadence, auto-assigning each to a paycheck."""
+    if req.recurrence not in ("weekly", "biweekly", "monthly"):
+        raise HTTPException(400, "recurrence must be weekly | biweekly | monthly")
+    if req.occurrences < 1 or req.occurrences > 60:
+        raise HTTPException(400, "occurrences must be between 1 and 60")
+    try:
+        start = datetime.strptime(req.start_date, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(400, "start_date must be YYYY-MM-DD")
+
+    series_id = str(uuid.uuid4())
+    created = []
+    for i in range(req.occurrences):
+        due = _add_recurrence(start, req.recurrence, i)
+        due_iso = due.strftime("%Y-%m-%d")
+        mkey = _month_key_from_date(due)
+        # ensure month exists (auto-create)
+        existing_month = await db.months.find_one({"key": mkey}, {"_id": 0})
+        if not existing_month:
+            m = Month(
+                key=mkey,
+                name=due.strftime("%B %Y"),
+                year=due.year,
+                month=due.month,
+            )
+            await db.months.insert_one({**m.model_dump()})
+        pc = await _find_paycheck_for_date(due)
+        if not pc:
+            # skip if no paycheck exists yet for that period
+            continue
+        fraction = f"{i + 1}of{req.occurrences}" if req.fraction_prefix else None
+        b = BillItem(
+            paycheck_id=pc["id"],
+            month_key=mkey,
+            name=req.name,
+            amount=req.amount,
+            fraction=fraction,
+            due_date=due_iso,
+            recurrence=req.recurrence,
+            series_id=series_id,
+            category=req.category,
+        )
+        doc = b.model_dump()
+        await db.bills.insert_one({**doc})
+        created.append(doc)
+    return {"series_id": series_id, "count": len(created), "bills": created}
+
+
+@api_router.delete("/bills/series/{series_id}")
+async def delete_series(series_id: str):
+    result = await db.bills.delete_many({"series_id": series_id})
+    return {"deleted": result.deleted_count}
+
+
+# ---------- Summary + AI ----------
 @api_router.get("/summary")
 async def get_summary():
-    """Overall YTD summary across all months."""
     paychecks = await db.paychecks.find({}, {"_id": 0}).to_list(500)
     bills = await db.bills.find({}, {"_id": 0}).to_list(2000)
     total_income = sum(p["total_cash"] for p in paychecks)
@@ -345,6 +511,107 @@ async def get_summary():
     }
 
 
+@api_router.get("/paychecks/{paycheck_id}/savings-recommendation")
+async def savings_recommendation(paycheck_id: str):
+    """Deterministic savings recommendation: after all fixed obligations, suggest 20% of what's left."""
+    pc = await db.paychecks.find_one({"id": paycheck_id}, {"_id": 0})
+    if not pc:
+        raise HTTPException(404, "Paycheck not found")
+    bills = await db.bills.find({"paycheck_id": paycheck_id}, {"_id": 0}).to_list(200)
+    unpaid_bills_total = sum(b["amount"] for b in bills if not b.get("paid"))
+    fixed = (
+        pc["vehicle_payment"] + pc["targeted_payoffs"] + pc["current_month_bills"]
+        + pc["next_month_early_bills"] + pc["living_costs"]
+    )
+    net_after_fixed = max(0.0, pc["total_cash"] - fixed - unpaid_bills_total)
+    conservative = round(net_after_fixed * 0.10, 2)
+    balanced = round(net_after_fixed * 0.20, 2)
+    aggressive = round(net_after_fixed * 0.35, 2)
+    return {
+        "paycheck_id": paycheck_id,
+        "total_cash": pc["total_cash"],
+        "fixed_obligations": round(fixed, 2),
+        "unpaid_bills": round(unpaid_bills_total, 2),
+        "net_after_obligations": round(net_after_fixed, 2),
+        "current_savings_transfer": pc.get("savings_transfer", 0),
+        "recommendations": {
+            "conservative": conservative,
+            "balanced": balanced,
+            "aggressive": aggressive,
+        },
+    }
+
+
+@api_router.post("/paychecks/{paycheck_id}/ai-advice")
+async def ai_advice(paycheck_id: str):
+    """Ask Claude what to pay with this paycheck. Returns structured JSON."""
+    pc = await db.paychecks.find_one({"id": paycheck_id}, {"_id": 0})
+    if not pc:
+        raise HTTPException(404, "Paycheck not found")
+    bills = await db.bills.find({"paycheck_id": paycheck_id}, {"_id": 0}).to_list(200)
+
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(500, "AI not configured")
+
+    from emergentintegrations.llm.chat import LlmChat, UserMessage
+
+    bill_lines = "\n".join(
+        f"- {b['name']}: ${b['amount']:.2f}"
+        + (f" ({b['fraction']})" if b.get("fraction") else "")
+        + (f" [PAID]" if b.get("paid") else "")
+        + (f" due {b['due_date']}" if b.get("due_date") else "")
+        for b in bills
+    ) or "(no bills yet)"
+
+    sys_msg = (
+        "You are a personal finance coach helping a user allocate one paycheck. "
+        "Return STRICT JSON with keys: priority_order (array of {name, amount, reason}), "
+        "recommended_savings (number), buffer_after (number), summary (short string, <=200 chars). "
+        "Consider: pay fixed obligations first (vehicle, rent, utilities), then targeted debt payoffs, "
+        "then variable bills, keep living costs intact, and always leave a positive buffer if possible."
+    )
+    user_msg = (
+        f"Paycheck #{pc['number']} ({pc['date_range']}) — total cash ${pc['total_cash']:.2f}.\n"
+        f"Fixed allocations:\n"
+        f"  Vehicle payment: ${pc['vehicle_payment']:.2f}\n"
+        f"  Targeted payoffs: ${pc['targeted_payoffs']:.2f}\n"
+        f"  Current month bills: ${pc['current_month_bills']:.2f}\n"
+        f"  Next month early bills: ${pc['next_month_early_bills']:.2f}\n"
+        f"  Living costs: ${pc['living_costs']:.2f}\n"
+        f"  Current savings transfer: ${pc['savings_transfer']:.2f}\n"
+        f"  Unallocated buffer: ${pc['unallocated_buffer']:.2f}\n\n"
+        f"Bills to pay this cycle:\n{bill_lines}\n\n"
+        "Respond with JSON only, no prose."
+    )
+
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=f"paycheck-advice-{paycheck_id}",
+        system_message=sys_msg,
+    ).with_model("anthropic", "claude-sonnet-4-6")
+
+    try:
+        response = await chat.send_message(UserMessage(text=user_msg))
+    except Exception as e:
+        logger.error(f"AI advice failed: {e}")
+        raise HTTPException(502, f"AI request failed: {e}")
+
+    # response is text; strip code fences if present and parse JSON
+    text = response.strip() if isinstance(response, str) else str(response)
+    if text.startswith("```"):
+        text = text.strip("`")
+        # remove language tag
+        if text.lower().startswith("json"):
+            text = text[4:]
+        text = text.strip()
+    try:
+        data = json.loads(text)
+    except Exception:
+        # return raw text if unparseable
+        return {"raw": text, "priority_order": [], "recommended_savings": None, "summary": text[:400]}
+    return data
+
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -361,12 +628,10 @@ logger = logging.getLogger(__name__)
 
 @app.on_event("startup")
 async def startup_seed():
-    """Auto-seed on first launch."""
     try:
         existing = await db.months.count_documents({})
         if existing == 0:
             logger.info("Auto-seeding paycheck planner data...")
-            # replicate seed_data logic
             months_docs = [Month(**m).model_dump() for m in SEED_MONTHS]
             await db.months.insert_many([{**d} for d in months_docs])
             paycheck_docs = []
@@ -385,6 +650,13 @@ async def startup_seed():
             if bill_docs:
                 await db.bills.insert_many([{**d} for d in bill_docs])
             logger.info(f"Seeded {len(months_docs)} months, {len(paycheck_docs)} paychecks, {len(bill_docs)} bills")
+        else:
+            # backfill start/end dates on existing seeded paychecks
+            for p in SEED_PAYCHECKS:
+                await db.paychecks.update_one(
+                    {"month_key": p["month_key"], "number": p["number"], "$or": [{"start_date": None}, {"start_date": {"$exists": False}}]},
+                    {"$set": {"start_date": p["start_date"], "end_date": p["end_date"]}},
+                )
     except Exception as e:
         logger.error(f"Seed failed: {e}")
 

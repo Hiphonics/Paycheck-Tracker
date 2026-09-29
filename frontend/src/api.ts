@@ -46,6 +46,8 @@ export type Paycheck = {
   weekly_desired_spending: number;
   weekly_target_spending: number;
   starting_cash: number;
+  start_date?: string | null;
+  end_date?: string | null;
 };
 
 export type Bill = {
@@ -56,6 +58,10 @@ export type Bill = {
   amount: number;
   fraction?: string | null;
   paid: boolean;
+  due_date?: string | null;
+  recurrence?: string;
+  series_id?: string | null;
+  category?: string;
 };
 
 export type PaycheckWithBills = Paycheck & { bills: Bill[] };
@@ -71,14 +77,64 @@ export type Summary = {
   savings_rate: number;
 };
 
+export type SavingsRec = {
+  paycheck_id: string;
+  total_cash: number;
+  fixed_obligations: number;
+  unpaid_bills: number;
+  net_after_obligations: number;
+  current_savings_transfer: number;
+  recommendations: { conservative: number; balanced: number; aggressive: number };
+};
+
+export type AIAdvice = {
+  priority_order?: { name: string; amount: number; reason: string }[];
+  recommended_savings?: number;
+  buffer_after?: number;
+  summary?: string;
+  raw?: string;
+};
+
 export const api = {
   seed: () => req<{ seeded: boolean }>("/seed", { method: "POST" }),
   listMonths: () => req<MonthSummary[]>("/months"),
   getMonth: (key: string) => req<MonthDetail>(`/months/${key}`),
   getPaycheck: (id: string) => req<PaycheckWithBills>(`/paychecks/${id}`),
-  updatePaycheck: (id: string, body: Partial<Pick<Paycheck, "weekly_desired_spending" | "weekly_target_spending">>) =>
-    req<Paycheck>(`/paychecks/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  updatePaycheck: (
+    id: string,
+    body: Partial<Pick<Paycheck, "weekly_desired_spending" | "weekly_target_spending" | "savings_transfer">>,
+  ) => req<Paycheck>(`/paychecks/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  listBills: (params: { month_key?: string; paycheck_id?: string } = {}) => {
+    const q = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => !!v) as [string, string][],
+    ).toString();
+    return req<Bill[]>(`/bills${q ? "?" + q : ""}`);
+  },
+  createBill: (body: {
+    paycheck_id?: string;
+    month_key: string;
+    name: string;
+    amount: number;
+    fraction?: string | null;
+    due_date?: string | null;
+    recurrence?: string;
+    category?: string;
+  }) => req<Bill>(`/bills`, { method: "POST", body: JSON.stringify(body) }),
+  updateBill: (id: string, body: Partial<Bill>) =>
+    req<Bill>(`/bills/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   toggleBill: (id: string, paid: boolean) =>
     req<Bill>(`/bills/${id}`, { method: "PATCH", body: JSON.stringify({ paid }) }),
+  deleteBill: (id: string) => req<{ deleted: boolean }>(`/bills/${id}`, { method: "DELETE" }),
+  generateRecurring: (body: {
+    name: string;
+    amount: number;
+    category?: string;
+    recurrence: "weekly" | "biweekly" | "monthly";
+    start_date: string;
+    occurrences: number;
+    fraction_prefix?: boolean;
+  }) => req<{ series_id: string; count: number; bills: Bill[] }>(`/bills/generate`, { method: "POST", body: JSON.stringify(body) }),
   summary: () => req<Summary>("/summary"),
+  savingsRec: (paycheckId: string) => req<SavingsRec>(`/paychecks/${paycheckId}/savings-recommendation`),
+  aiAdvice: (paycheckId: string) => req<AIAdvice>(`/paychecks/${paycheckId}/ai-advice`, { method: "POST" }),
 };

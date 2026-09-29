@@ -23,6 +23,10 @@ export default function RootLayout() {
                   name="paycheck/[id]"
                   options={{ presentation: "card", headerShown: false }}
                 />
+                <Stack.Screen
+                  name="bill/[id]"
+                  options={{ presentation: "modal", headerShown: false }}
+                />
               </Stack>
             </KeyboardProvider>
           </SafeAreaProvider>
