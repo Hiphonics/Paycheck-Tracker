@@ -1,0 +1,163 @@
+{
+  "app_name": "Paycheck Planner",
+  "personality": "1 iOS-Native Clean",
+  "personality_one_liner": "A highly readable, metric-focused financial tracker that frames your money clearly without overwhelming you with data.",
+  "color": {
+    "surface": "#FCFAF8",
+    "onSurface": "#1A1A1A",
+    "surfaceSecondary": "#F3EFEA",
+    "onSurfaceSecondary": "#2C2C2C",
+    "surfaceTertiary": "#EAE5DF",
+    "onSurfaceTertiary": "#3D3D3D",
+    "surfaceInverse": "#1A1A1A",
+    "onSurfaceInverse": "#FCFAF8",
+    "brand": "#A2C2E1",
+    "onBrand": "#0A1F35",
+    "brandPrimary": "#A2C2E1",
+    "onBrandPrimary": "#0A1F35",
+    "brandSecondary": "#C3B1E1",
+    "onBrandSecondary": "#231140",
+    "brandTertiary": "#B2D8B2",
+    "onBrandTertiary": "#0D2E0D",
+    "success": "#B2D8B2",
+    "onSuccess": "#0D2E0D",
+    "warning": "#FDE792",
+    "onWarning": "#4D3B00",
+    "error": "#E1A2A2",
+    "onError": "#4A0F0F",
+    "info": "#A2C2E1",
+    "onInfo": "#0A1F35",
+    "border": "#EAE5DF",
+    "borderStrong": "#D5CEC5",
+    "divider": "#F3EFEA",
+    "muted": "#76726E"
+  },
+  "typography": {
+    "displayFontFamily": "Space Grotesk",
+    "textFontFamily": "Geist",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Generous vertical breathing room for metrics. Content must never sit under the notch/safe area.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": "1",
+  "navigation": "bottom_tabs",
+  "icon_set": "Phosphor",
+  "glassmorphism": {
+    "enabled": "true",
+    "do's": [
+      "Sticky headers over scrolling content",
+      "Bottom tab bar when content scrolls behind",
+      "Featured paycheck overview card over subtle background"
+    ],
+    "dont's": [
+      "Every card in dense lists",
+      "Form fields or body text regions"
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Dashboard",
+      "purpose": "A high-level summary of the month with a prominent 'Left to Budget' metric and color-coded paycheck cards.",
+      "states": {
+        "loading": "Centered spinner",
+        "empty": "Illustration with 'No budget set for this month' and a 'Start Planning' primary CTA.",
+        "error": "Readable message with Retry button"
+      },
+      "layout": "Sticky header with Month Selector. Top section features a large 'Left to Budget' Space Grotesk metric inside a glass hero card. Below it, a vertical list of color-coded 'Paycheck' cards (Light Blue, Light Purple, Light Green, Yellow) that detail allocated vs remaining funds. Sticky primary CTA 'Add Income' at the bottom."
+    },
+    {
+      "name": "AllocationPlanner",
+      "purpose": "Detailed breakdown of a single paycheck's allocation into specific categories.",
+      "states": {
+        "loading": "Centered spinner",
+        "empty": "Illustration with 'No expenses assigned to this paycheck yet'.",
+        "error": "Readable message with Retry button"
+      },
+      "layout": "Header shows selected paycheck date and remaining unallocated funds. Scrollable list of categories (Vehicle Payment, Current Month Bills, Living Costs, Savings Transfer, Buffer) acting as interactive cards. A bottom sheet for editing category limits. A progress bar visualizing 'Left to Buffer' updates in real time."
+    },
+    {
+      "name": "BillCalendar",
+      "purpose": "Visual calendar showing bill due dates and paycheck arrival dates.",
+      "states": {
+        "loading": "Centered spinner",
+        "empty": "Minimalist calendar illustration with 'No bills scheduled yet'.",
+        "error": "Readable message with Retry button"
+      },
+      "layout": "Top section features a horizontal date carousel or a minimal grid calendar. Below the calendar, a timeline-style feed of upcoming bills grouped by paycheck cycle, utilizing the cycle's specific color dot for visual association."
+    },
+    {
+      "name": "Tracker",
+      "purpose": "Multi-month performance summary covering weekly desired spending, savings progress, and buffer levels.",
+      "states": {
+        "loading": "Centered spinner",
+        "empty": "Potted plant illustration with 'Start tracking to see your growth'.",
+        "error": "Readable message with Retry button"
+      },
+      "layout": "Bento-grid layout. Top cards show 'Weekly Spending limit vs Spent' with a progress ring. Middle cards track 'Savings Transfers' and 'Buffer Level'. Bottom section shows a bar chart or sparkline for multi-month trend. Avoid dense tables; prioritize clean modular blocks."
+    }
+  ],
+  "images": {
+    "dashboard_hero": {
+      "url": "https://images.unsplash.com/photo-1611099144078-5596e87ef54c?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1ODR8MHwxfHNlYXJjaHwxfHxtaW5pbWFsaXN0JTIwYWJzdHJhY3QlMjB3YWxsZXR8ZW58MHx8fHwxNzkwNzA1MDY3fDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Minimalist abstract layout with wallet and watch"
+    },
+    "empty_calendar": {
+      "url": "https://images.unsplash.com/photo-1578625155481-7bc40a6481b6?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODd8MHwxfHNlYXJjaHwxfHxtaW5pbWFsaXN0JTIwY2FsZW5kYXIlMjBlbXB0eSUyMHN0YXRlfGVufDB8fHx8MTc5MDcwNTA2N3ww&ixlib=rb-4.1.0&q=85",
+      "alt": "White minimalist calendar"
+    },
+    "empty_tracker": {
+      "url": "https://images.unsplash.com/photo-1487700160041-babef9c3cb55?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDJ8MHwxfHNlYXJjaHwxfHxwb3R0ZWQlMjBtb25leSUyMHBsYW50JTIwbWluaW1hbHxlbnwwfHx8fDE3OTA3MDUwNjd8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "Minimalist green leafed plant"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Use '1 iOS-Native Clean' personality: prioritize readability, large metrics, and generous padding.",
+    "IMPORTANT: The problem statement explicitly requested 'Light Blue, Light Purple, Light Green, Yellow' for the color-coded paycheck cycles. These colors have been permitted and mapped in the palette (brandPrimary=Blue, brandSecondary=Purple, brandTertiary=Green, warning=Yellow). Use them distinctively to color-code paycheck cards.",
+    "Implement a sticky 'Left to Budget' metric at the top of the Home and Allocation screens, using Space Grotesk for numbers to create an editorial/data-rich hierarchy.",
+    "Ensure all primary actions (e.g., 'Add Income', 'Save Allocation') are sticky at the bottom with safe-area clearance.",
+    "Use glassmorphism (expo-blur) for sticky headers, the bottom tab bar, and the background of sticky bottom CTAs to ensure scrolling content feels native and fluid beneath them.",
+    "When applying text over the hero image, apply a vertical gradient scrim (transparent to surfaceInverse) to guarantee WCAG contrast.",
+    "Layouts should be modular (e.g., bento-grid for the Tracker screen) instead of dense web-dashboard tables."
+  ],
+  "haptics": {
+    "events": {
+      "paycheck_card_press": "light",
+      "allocation_save": "success",
+      "tab_change": "selection",
+      "slider_commit": "medium",
+      "category_reorder": "heavy"
+    }
+  }
+}
