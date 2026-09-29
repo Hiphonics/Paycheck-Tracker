@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -6,12 +6,15 @@ import {
   Pressable,
   ActivityIndicator,
   Modal,
+  TextInput,
+  Platform,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import Icon from "@react-native-vector-icons/ionicons";
-import { api } from "@/src/api";
+import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
+import { api, Goal, SavingsRec } from "@/src/api";
 import { makeStyles, spacing, radius, useTheme, ThemeColors } from "@/src/theme";
 import { fmt } from "@/src/components/stat-tile";
 
@@ -51,13 +54,23 @@ export default function PaycheckDetail() {
   });
 
   const applySavings = useMutation({
-    mutationFn: (amount: number) => api.updatePaycheck(id!, { savings_transfer: amount }),
+    mutationFn: async ({ amount, goalId }: { amount: number; goalId: string | null }) => {
+      await api.updatePaycheck(id!, { savings_transfer: amount });
+      if (goalId && amount > 0) {
+        await api.contributeGoal(goalId, amount, `From paycheck ${q.data?.number ?? ""}`);
+      }
+      return { amount, goalId };
+    },
     onSuccess: async () => {
       await Promise.all([
         qc.invalidateQueries({ queryKey: ["paycheck", id] }),
+        qc.invalidateQueries({ queryKey: ["savings-rec", id] }),
         qc.invalidateQueries({ queryKey: ["months"] }),
         qc.invalidateQueries({ queryKey: ["month"] }),
+        qc.invalidateQueries({ queryKey: ["month-full"] }),
         qc.invalidateQueries({ queryKey: ["summary"] }),
+        qc.invalidateQueries({ queryKey: ["goals"] }),
+        qc.invalidateQueries({ queryKey: ["streak"] }),
       ]);
       setSavingsOpen(false);
     },
@@ -248,14 +261,14 @@ export default function PaycheckDetail() {
         </View>
       </Modal>
 
-      {/* Savings Recommendation Modal */}
+      {/* Savings Modal: dollar amount + optional goal */}
       <Modal visible={savingsOpen} animationType="slide" transparent onRequestClose={() => setSavingsOpen(false)}>
         <Pressable style={styles.backdrop} onPress={() => setSavingsOpen(false)} />
         <View style={[styles.sheet, { paddingBottom: insets.bottom + spacing.lg }]} testID="savings-sheet">
           <View style={styles.sheetHandle} />
           <View style={styles.sheetHeader}>
             <Icon name="trending-up" size={18} color={colors.onSurface} />
-            <Text style={styles.sheetTitle}>Savings recommendation</Text>
+            <Text style={styles.sheetTitle}>Set savings amount</Text>
             <Pressable onPress={() => setSavingsOpen(false)} hitSlop={8}>
               <Icon name="close" size={20} color={colors.muted} />
             </Pressable>
@@ -263,34 +276,12 @@ export default function PaycheckDetail() {
           {savingsQ.isLoading || !savingsQ.data ? (
             <ActivityIndicator color={colors.onSurface} style={{ marginTop: spacing.lg }} />
           ) : (
-            <>
-              <Text style={styles.aiHint}>
-                After ${savingsQ.data.fixed_obligations.toFixed(0)} fixed obligations and ${savingsQ.data.unpaid_bills.toFixed(0)} unpaid bills,
-                you have <Text style={{ fontWeight: "700", color: colors.onSurface }}>{fmt(savingsQ.data.net_after_obligations)}</Text> free.
-                Current savings transfer: <Text style={{ fontWeight: "700", color: colors.onSurface }}>{fmt(savingsQ.data.current_savings_transfer)}</Text>.
-              </Text>
-              <View style={{ gap: spacing.sm, marginTop: spacing.md }}>
-                <RecCard
-                  label="Conservative · 10%"
-                  amount={savingsQ.data.recommendations.conservative}
-                  onPress={() => applySavings.mutate(savingsQ.data!.recommendations.conservative)}
-                  testID="rec-conservative"
-                />
-                <RecCard
-                  label="Balanced · 20%"
-                  amount={savingsQ.data.recommendations.balanced}
-                  onPress={() => applySavings.mutate(savingsQ.data!.recommendations.balanced)}
-                  emphasize
-                  testID="rec-balanced"
-                />
-                <RecCard
-                  label="Aggressive · 35%"
-                  amount={savingsQ.data.recommendations.aggressive}
-                  onPress={() => applySavings.mutate(savingsQ.data!.recommendations.aggressive)}
-                  testID="rec-aggressive"
-                />
-              </View>
-            </>
+            <SavingsForm
+              paycheckId={id!}
+              rec={savingsQ.data}
+              onApply={(amount, goalId) => applySavings.mutate({ amount, goalId })}
+              submitting={applySavings.isPending}
+            />
           )}
         </View>
       </Modal>
@@ -323,28 +314,154 @@ function AllocLine({
   );
 }
 
-function RecCard({
-  label,
-  amount,
-  onPress,
-  emphasize,
-  testID,
+function SavingsForm({
+  paycheckId,
+  rec,
+  onApply,
+  submitting,
 }: {
-  label: string;
-  amount: number;
-  onPress: () => void;
-  emphasize?: boolean;
-  testID?: string;
+  paycheckId: string;
+  rec: SavingsRec;
+  onApply: (amount: number, goalId: string | null) => void;
+  submitting: boolean;
 }) {
   const styles = useStyles();
+  const { colors } = useTheme();
+  const [amount, setAmount] = useState(String(rec.current_savings_transfer || rec.recommendations.balanced || 0));
+  const [goalId, setGoalId] = useState<string | null>(null);
+
+  const goalsQ = useQuery({ queryKey: ["goals"], queryFn: api.listGoals });
+  const parsed = parseFloat(amount) || 0;
+  const overNet = parsed > rec.net_after_obligations && rec.net_after_obligations > 0;
+
+  const presets = Array.from(new Set([
+    ...(rec.presets || []),
+    Math.round(rec.recommendations.conservative),
+    Math.round(rec.recommendations.balanced),
+    Math.round(rec.recommendations.aggressive),
+  ].filter((n) => n > 0))).sort((a, b) => a - b).slice(0, 6);
+
   return (
-    <Pressable onPress={onPress} style={[styles.recCard, emphasize && styles.recCardEm]} testID={testID}>
-      <View style={{ flex: 1 }}>
-        <Text style={[styles.recLabel, emphasize && styles.recLabelEm]}>{label}</Text>
-        <Text style={[styles.recAmt, emphasize && styles.recAmtEm]}>{fmt(amount)}</Text>
+    <KeyboardAwareScrollView contentContainerStyle={{ gap: spacing.md }} showsVerticalScrollIndicator={false}>
+      <Text style={styles.aiHint}>
+        Total available: <Text style={styles.formStrong}>{fmt(rec.total_cash)}</Text> · Fixed obligations:{" "}
+        <Text style={styles.formStrong}>{fmt(rec.fixed_obligations)}</Text> · Free to save:{" "}
+        <Text style={styles.formStrong}>{fmt(rec.net_after_obligations)}</Text>
+      </Text>
+
+      <View>
+        <Text style={styles.formLabel}>How much to save this paycheck?</Text>
+        <View style={styles.dollarInputWrap}>
+          <Text style={styles.dollarSign}>$</Text>
+          <TextInput
+            style={styles.dollarInput}
+            keyboardType="decimal-pad"
+            value={amount}
+            onChangeText={setAmount}
+            placeholder="0"
+            placeholderTextColor={colors.muted}
+            testID="input-savings-amount"
+            selectTextOnFocus
+          />
+        </View>
+        {overNet ? (
+          <Text style={styles.warnText}>Over your free-to-save balance — will pull from buffer.</Text>
+        ) : (
+          <Text style={styles.aiHint}>
+            Was {fmt(rec.current_savings_transfer)} · Free {fmt(rec.net_after_obligations)}
+          </Text>
+        )}
       </View>
-      <Text style={[styles.recCta, emphasize && styles.recCtaEm]}>Apply →</Text>
-    </Pressable>
+
+      {presets.length ? (
+        <View>
+          <Text style={styles.formLabel}>Quick picks</Text>
+          <View style={styles.presetRow}>
+            {presets.map((p) => (
+              <Pressable
+                key={p}
+                onPress={() => setAmount(String(p))}
+                style={[styles.presetChip, parsed === p && styles.presetChipActive]}
+                testID={`preset-${p}`}
+              >
+                <Text style={[styles.presetText, parsed === p && styles.presetTextActive]}>
+                  ${p}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
+      ) : null}
+
+      <View>
+        <Text style={styles.formLabel}>Send to a goal (optional)</Text>
+        {goalsQ.data && goalsQ.data.length > 0 ? (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ gap: spacing.sm, paddingVertical: 4 }}
+          >
+            <Pressable
+              onPress={() => setGoalId(null)}
+              style={[styles.goalPick, goalId === null && styles.goalPickActive]}
+              testID="goal-pick-none"
+            >
+              <Text style={[styles.goalPickText, goalId === null && styles.goalPickTextActive]}>
+                No goal
+              </Text>
+            </Pressable>
+            {goalsQ.data.map((g: Goal) => {
+              const c = colors[g.color as keyof typeof colors] as string;
+              return (
+                <Pressable
+                  key={g.id}
+                  onPress={() => setGoalId(g.id)}
+                  style={[
+                    styles.goalPick,
+                    goalId === g.id && { backgroundColor: c, borderColor: c },
+                  ]}
+                  testID={`goal-pick-${g.id}`}
+                >
+                  <Icon
+                    name={g.icon as any}
+                    size={14}
+                    color={goalId === g.id ? colors.onCycle : colors.onSurface}
+                  />
+                  <Text
+                    style={[
+                      styles.goalPickText,
+                      goalId === g.id && { color: colors.onCycle },
+                    ]}
+                  >
+                    {g.name}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        ) : (
+          <Text style={styles.aiHint}>
+            No savings goals yet. Add one from the Tracker tab to route savings toward a car, house, etc.
+          </Text>
+        )}
+      </View>
+
+      <Pressable
+        style={[styles.savePrimary, submitting && { opacity: 0.6 }]}
+        disabled={submitting}
+        onPress={() => onApply(parsed, goalId)}
+        testID="apply-savings"
+      >
+        {submitting ? (
+          <ActivityIndicator color={colors.onSurfaceInverse} />
+        ) : (
+          <Text style={styles.savePrimaryText}>
+            Save {fmt(parsed)}
+            {goalId ? " → goal" : ""}
+          </Text>
+        )}
+      </Pressable>
+    </KeyboardAwareScrollView>
   );
 }
 
@@ -470,4 +587,67 @@ const useStyles = makeStyles((colors: ThemeColors) => ({
   recAmtEm: { color: colors.onSurfaceInverse },
   recCta: { fontSize: 13, fontWeight: "700", color: colors.onSurface },
   recCtaEm: { color: colors.onSurfaceInverse },
+
+  formStrong: { fontWeight: "700", color: colors.onSurface },
+  formLabel: {
+    fontSize: 11,
+    color: colors.muted,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    fontWeight: "600",
+    marginBottom: 6,
+  },
+  dollarInputWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.surfaceSecondary,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    height: 56,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  dollarSign: { fontSize: 24, fontWeight: "700", color: colors.muted, marginRight: 4 },
+  dollarInput: { flex: 1, fontSize: 26, fontWeight: "700", color: colors.onSurface },
+  warnText: { fontSize: 11, color: colors.warning, marginTop: 6 },
+
+  presetRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  presetChip: {
+    paddingHorizontal: spacing.md,
+    height: 34,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceSecondary,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  presetChipActive: { backgroundColor: colors.surfaceInverse, borderColor: colors.surfaceInverse },
+  presetText: { fontSize: 13, fontWeight: "700", color: colors.onSurfaceSecondary },
+  presetTextActive: { color: colors.onSurfaceInverse },
+
+  goalPick: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: spacing.md,
+    height: 34,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceSecondary,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  goalPickActive: { backgroundColor: colors.surfaceInverse, borderColor: colors.surfaceInverse },
+  goalPickText: { fontSize: 12, fontWeight: "600", color: colors.onSurfaceSecondary },
+  goalPickTextActive: { color: colors.onSurfaceInverse },
+
+  savePrimary: {
+    backgroundColor: colors.surfaceInverse,
+    borderRadius: radius.md,
+    height: 52,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: spacing.sm,
+  },
+  savePrimaryText: { color: colors.onSurfaceInverse, fontWeight: "700", fontSize: 15 },
 }));

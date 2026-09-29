@@ -27,6 +27,10 @@ export default function RootLayout() {
                   name="bill/[id]"
                   options={{ presentation: "modal", headerShown: false }}
                 />
+                <Stack.Screen
+                  name="goals"
+                  options={{ presentation: "card", headerShown: false }}
+                />
               </Stack>
             </KeyboardProvider>
           </SafeAreaProvider>

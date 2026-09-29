@@ -1,0 +1,30 @@
+{
+  "summary": "Frontend-only regression test for 'Cannot read property ErrorBoundary of undefined' render crash. All 7 requested flows verified via Playwright on mobile viewport (390x844). The route module load crash is FIXED — /paycheck/[id] loads cleanly, the Set savings bottom sheet (which imports/uses SavingsRec) opens without error, and the tracker route (which had the CALENDAR trigger bug) renders with streak card + YTD bento + year/month chips + goals section. Dashboard renders year chips (2026-2028) + 12 month chips + buffer hero + YTD bento. Goals screen (/goals) loads with empty state. Bills tab renders without crash. No pageerror or console error captured during navigation across tabs.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "expo-notifications (Expo Go SDK 53+)", "issue": "expo-notifications throws on Android in Expo Go: 'Android Push notifications functionality provided by expo-notifications was removed from Expo Go with the release of SDK 53. Use a development build instead.' Not blocking web, but will crash Android Expo Go preview when tracker mounts. Reference: /app/frontend/src/notifications.ts:1 and /app/frontend/app/(tabs)/tracker.tsx:19. Consider guarding with Platform.OS !== 'android' || !Constants.appOwnership==='expo', or moving to a dev build."}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "No action needed on the reported bug — regression fix is verified working.",
+    "Optional: guard expo-notifications imports/scheduling on Android Expo Go (SDK 53+ removed remote notifications). Currently only a warning on web, but blocks Android Expo Go bundling for tracker route.",
+    "Optional cleanup: metro logs also show 'Route ./(tabs)/tracker.tsx is missing the required default export' and same for ./bill/[id].tsx — these appear during Android bundling only (web bundles fine and screens render). Likely a stale HMR/cache artifact, but worth confirming both files have default exports (they do on disk)."
+  ],
+  "critical_code_review_comments": [
+    "paycheck/[id].tsx (654 lines) is approaching the 700-line soft limit — consider extracting SavingsForm and AllocLine into src/components/.",
+    "tracker.tsx (653 lines) same recommendation — WeeklyTracker component can be split out.",
+    "Notifications side-effect fires on every tracker mount inside a useEffect that only checks web; safe now but could double-schedule if permission grant races. Good that hasStreakReminder guard exists."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not tested (frontend-only request)", "frontend": "100% (7/7 flows pass)"},
+  "seed_data_creation": "None. Used existing seeded 2026 data (Paycheck 1 in Sept 2026 with $1,476 total, 3/9 bills paid).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Regression for the ErrorBoundary crash is closed. Default active month on Dashboard/Tracker is 2027-01 which has no paychecks; testing paycheck-detail requires switching to 2026 first (year-chip-2026 → month with data like 2026-09). Paycheck cards use testID='paycheck-card-<id>', savings modal uses testID='savings-sheet' + 'input-savings-amount', tracker uses testID='tracker-screen' + 'streak-card', goals opens via testID='open-goals'.",
+  "rca_of_issue": "Original crash: Babel/Metro could not bundle /app/frontend/app/paycheck/[id].tsx because of an inline type reference `rec: import('@/src/api').SavingsRec` inside a function parameter — TypeScript inline import types trip the react-native Babel preset for route modules and export the module as undefined, causing expo-router/useScreens.js:141 to read `.ErrorBoundary` on undefined. Second contributor: `Notifications.SchedulableTriggerInputTypes.CALENDAR` with day/hour/minute keys is invalid — CALENDAR expects seconds/UTC fields; only MONTHLY takes day/hour/minute. Both fixes applied by main agent (hoisted `import { SavingsRec }` at top of paycheck/[id].tsx and switched trigger to MONTHLY in tracker.tsx). Verified: route module now loads, paycheck detail renders, savings sheet opens, tracker no longer throws on schedule call (web platform path returns early anyway)."
+}

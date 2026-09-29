@@ -1,0 +1,38 @@
+{
+  "summary": "Iteration 3 verified: (a) full-year scaffolding — GET /api/years and /api/months?year=2026 return 12 months with is_template=true for Jan-Aug and paycheck-backed months for Sept-Dec; (b) POST /api/months/ensure-year is idempotent and validates range; (c) BUG FIX confirmed — GET /api/paychecks/{id}/savings-recommendation now returns net_after_obligations = total_cash - fixed_obligations (no double-subtraction of unpaid_bills) and non-zero conservative/balanced/aggressive plus a presets[] quick-picks array; (d) Goals CRUD + contribute (POST /goals, GET /goals, PATCH, DELETE, POST /goals/{id}/contribute) fully persistent — contributions accumulate; (e) GET /streak returns current_streak, best_streak, ytd_saved, message, monthly_saved; (f) regressions pass (seed idempotent, /summary, /months/{key}, /bills list). Backend: 17/17 pytest tests passed. Frontend (mobile 390x844): dashboard shows year chips + 12 month chips with template months rendered dim and empty-month card 'No paychecks in January 2026'; Tracker shows streak card with flame, YTD bento, year+month chips, inline goal previews, and Goals header button; Goals screen create/contribute flow works end-to-end; Paycheck detail 'Set savings' opens sheet with manual dollar TextInput, 6 presets ($25/$37/$50/$74/$100/$130 filtered by net), optional goal picker (only rendered when goals exist), and Apply button that PATCHes savings_transfer. No red screens, no deprecated packages, no React Native issues. Only benign expo-notifications web warning.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Goals form sheet", "issues": ["Bottom sheet extends below the viewport on 390x844; 'save-goal' button requires scroll_into_view before it becomes visible. Not blocking (KeyboardAvoidingView handles it on real device), but consider making the sheet scrollable or capping form height."]},
+      {"screen": "Dashboard", "issues": ["Default selected year on load is the most recent (2027) rather than the current year (2026). Users must tap 2026 to see September data. Consider defaulting to a year that actually has paychecks, or to the current year."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration3.py",
+    "/app/test_reports/pytest/iteration3.xml"
+  ],
+  "action_items": [
+    "Optional: default dashboard/tracker to the current year (or the latest year with paychecks) instead of the max year in /api/years. Currently the 'year-chip-*' auto-selects 2027 which is empty.",
+    "Optional: make the goal-form-sheet scrollable so 'save-goal' is visible without manual scrolling on shorter viewports (390x844).",
+    "Optional: on iteration_2 note — 'Bills' bottom tab label still doesn't match its 'Calendar' screen header; carry-over cosmetic."
+  ],
+  "critical_code_review_comments": [
+    "server.py still uses deprecated @app.on_event('startup'/'shutdown'); migrate to FastAPI lifespan when convenient.",
+    "server.py is 866 lines — still under 1000 but approaching the split threshold; consider extracting Goals + Streak into a module.",
+    "_ensure_year_months does N find_one + insert_one calls per year; acceptable for 12 rows but could be a single insert_many with a pre-filter for scale.",
+    "savings_streak() aggregates paychecks per-month in a Python loop — for larger datasets an $facet/aggregate pipeline would be preferable.",
+    "Frontend api.ts uses process.env.EXPO_PUBLIC_BACKEND_URL directly (fine, but no fallback assertion) — a missing env would silently produce '/api/*' relative requests."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration3.py (new)"
+  ],
+  "success_rate": {"backend": "100% (17/17)", "frontend": "100% (all iteration-3 flows verified)"},
+  "seed_data_creation": "No new seed. Test goals prefixed TEST_UI_* were created and deleted through DELETE /api/goals/{id}. A test PATCH set paycheck 3 savings_transfer to 75 (previous value shown was $0); may need reset if visuals matter for demo.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Reusable pytest at /app/backend/tests/test_iteration3.py (17 tests, ~1.6s). BASE_URL comes from EXPO_PUBLIC_BACKEND_URL env (public preview). Frontend testIDs added this iteration: year-chip-{year}, month-chip-{key}, tracker-year-{year}, tracker-month-{key}, streak-card, open-goals, goals-screen, add-goal-btn, goal-form-sheet, input-goal-name, input-goal-target, icon-{i}, color-{name}, save-goal, delete-goal, goal-{id}, contribute-{id}, goal-preview-{id}, goal-empty, input-contribute, confirm-contribute, input-savings-amount, preset-{n}, goal-pick-none, goal-pick-{id}, apply-savings. Backend savings-recommendation returns presets[] filtered by net_after_obligations; goal picker on savings sheet only renders when goals exist (goal-pick-none testID is conditional).",
+  "rca_of_issue": "Iteration 2 bug: savings-recommendation returned $0 because both fixed_obligations and unpaid_bills were subtracted from total_cash, but the aggregated buckets (vehicle_payment/targeted_payoffs/current_month_bills/next_month_early_bills/living_costs) already include those bills. FIX: server.py:606-607 now computes net_after_fixed = max(0, total_cash - fixed) only, and returns unpaid_bills as informational metadata. Verified for Sept paycheck 3 (total_cash=$1300, fixed=$929.55, net=$370.45, balanced=$74.09, presets=[25,37,50,74,100,130])."
+}

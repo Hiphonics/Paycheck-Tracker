@@ -21,13 +21,25 @@ export default function DashboardScreen() {
   const { colors } = useTheme();
   const qc = useQueryClient();
   const router = useRouter();
+  const [year, setYear] = useState<number | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
-  const monthsQ = useQuery({ queryKey: ["months"], queryFn: api.listMonths });
+  const yearsQ = useQuery({ queryKey: ["years"], queryFn: api.listYears });
+  const activeYear = year ?? yearsQ.data?.years[yearsQ.data.years.length - 1] ?? 2026;
+  const yearOptions = Array.from(
+    new Set([...(yearsQ.data?.years ?? [2026]), activeYear, activeYear - 1, activeYear + 1]),
+  ).sort();
+
+  const monthsQ = useQuery({
+    queryKey: ["months", activeYear],
+    queryFn: () => api.listMonths(activeYear),
+    enabled: !!activeYear,
+  });
   const summaryQ = useQuery({ queryKey: ["summary"], queryFn: api.summary });
 
   const months = monthsQ.data ?? [];
-  const activeKey = selectedKey ?? months[0]?.key ?? null;
+  const activeKey =
+    selectedKey ?? months.find((m) => !m.is_template)?.key ?? months[0]?.key ?? null;
   const activeMonth = months.find((m) => m.key === activeKey);
 
   const monthDetailQ = useQuery({
@@ -70,17 +82,41 @@ export default function DashboardScreen() {
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.chipRow}
         >
+          {yearOptions.map((y) => (
+            <Pressable
+              key={y}
+              onPress={() => {
+                setYear(y);
+                setSelectedKey(null);
+              }}
+              style={[styles.yearChip, activeYear === y && styles.yearChipActive]}
+              testID={`year-chip-${y}`}
+            >
+              <Text style={[styles.yearChipText, activeYear === y && styles.yearChipTextActive]}>
+                {y}
+              </Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.chipRow}
+        >
           {months.map((m) => (
             <Pressable
               key={m.key}
               onPress={() => setSelectedKey(m.key)}
-              style={[styles.chip, activeKey === m.key && styles.chipActive]}
+              style={[
+                styles.chip,
+                activeKey === m.key && styles.chipActive,
+                m.is_template && styles.chipTemplate,
+              ]}
               testID={`month-chip-${m.key}`}
             >
-              <Text
-                style={[styles.chipText, activeKey === m.key && styles.chipTextActive]}
-              >
-                {m.name.replace(" 2026", "")}
+              <Text style={[styles.chipText, activeKey === m.key && styles.chipTextActive]}>
+                {m.name.split(" ")[0].slice(0, 3)}
               </Text>
             </Pressable>
           ))}
@@ -103,6 +139,16 @@ export default function DashboardScreen() {
             </View>
 
             <Text style={styles.sectionTitle}>Paychecks in {activeMonth?.name}</Text>
+            {paychecks.length === 0 ? (
+              <View style={{ paddingHorizontal: spacing.lg }}>
+                <View style={styles.emptyMonthCard}>
+                  <Text style={styles.emptyMonthTitle}>No paychecks in {activeMonth?.name}.</Text>
+                  <Text style={styles.emptyMonthHint}>
+                    You can still add bills to this month from the Bills tab. Paycheck-level planning is coming for arbitrary months next.
+                  </Text>
+                </View>
+              </View>
+            ) : null}
             <View style={{ gap: spacing.md, paddingHorizontal: spacing.lg }}>
               {paychecks.map((p) => (
                 <PaycheckCard
@@ -225,8 +271,33 @@ const useStyles = makeStyles((colors: ThemeColors) => ({
     justifyContent: "center",
   },
   chipActive: { backgroundColor: colors.surfaceInverse, borderColor: colors.surfaceInverse },
+  chipTemplate: { opacity: 0.55 },
   chipText: { fontSize: 13, fontWeight: "600", color: colors.onSurfaceSecondary },
   chipTextActive: { color: colors.onSurfaceInverse },
+
+  yearChip: {
+    flexShrink: 0,
+    paddingHorizontal: spacing.lg,
+    height: 32,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceSecondary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  yearChipActive: { backgroundColor: colors.brandPrimary },
+  yearChipText: { fontSize: 13, fontWeight: "700", color: colors.onSurfaceSecondary },
+  yearChipTextActive: { color: colors.onBrandPrimary },
+
+  emptyMonthCard: {
+    padding: spacing.lg,
+    borderRadius: radius.lg,
+    backgroundColor: colors.surfaceSecondary,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderColor: colors.border,
+  },
+  emptyMonthTitle: { fontSize: 14, fontWeight: "700", color: colors.onSurface },
+  emptyMonthHint: { fontSize: 12, color: colors.muted, marginTop: 4, lineHeight: 18 },
 
   hero: {
     marginHorizontal: spacing.lg,

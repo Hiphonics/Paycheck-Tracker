@@ -108,6 +108,42 @@ class UpdatePaycheckSpendingReq(BaseModel):
     savings_transfer: Optional[float] = None
 
 
+class SavingsGoal(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    target_amount: float
+    current_amount: float = 0
+    icon: str = "wallet"  # ionicons name
+    color: str = "cycleBlue"
+    target_date: Optional[str] = None
+    notes: str = ""
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class CreateGoalReq(BaseModel):
+    name: str
+    target_amount: float
+    icon: str = "wallet"
+    color: str = "cycleBlue"
+    target_date: Optional[str] = None
+    notes: str = ""
+
+
+class UpdateGoalReq(BaseModel):
+    name: Optional[str] = None
+    target_amount: Optional[float] = None
+    current_amount: Optional[float] = None
+    icon: Optional[str] = None
+    color: Optional[str] = None
+    target_date: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class ContributeReq(BaseModel):
+    amount: float
+    note: Optional[str] = None
+
+
 # ---------- Seed data (unchanged) ----------
 CYCLE_COLORS = ["cycleBlue", "cyclePurple", "cycleGreen", "cycleYellow", "cycleOrange"]
 
@@ -310,9 +346,48 @@ async def seed_data(force: bool = False):
     }
 
 
+MONTH_NAMES = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+]
+
+
+async def _ensure_year_months(year: int) -> None:
+    """Idempotently create all 12 months for a year so YTD/trend views have full 12-month scaffolding."""
+    for month in range(1, 13):
+        key = f"{year:04d}-{month:02d}"
+        existing = await db.months.find_one({"key": key}, {"_id": 0})
+        if not existing:
+            m = Month(key=key, name=f"{MONTH_NAMES[month - 1]} {year}", year=year, month=month)
+            await db.months.insert_one({**m.model_dump()})
+
+
+@api_router.post("/months/ensure-year")
+async def ensure_year(year: int):
+    if year < 2000 or year > 2100:
+        raise HTTPException(400, "year out of range")
+    await _ensure_year_months(year)
+    return {"year": year, "ok": True}
+
+
+@api_router.get("/years")
+async def list_years():
+    """Return years present in the DB plus any adjacent years the user might want."""
+    docs = await db.months.find({}, {"_id": 0, "year": 1}).to_list(500)
+    years = sorted({d["year"] for d in docs})
+    if not years:
+        years = [datetime.now(timezone.utc).year]
+    return {"years": years}
+
+
 @api_router.get("/months")
-async def list_months():
-    months = await db.months.find({}, {"_id": 0}).sort("key", 1).to_list(100)
+async def list_months(year: Optional[int] = None):
+    if year is not None:
+        await _ensure_year_months(year)
+    q: dict = {}
+    if year is not None:
+        q["year"] = year
+    months = await db.months.find(q, {"_id": 0}).sort("key", 1).to_list(200)
     result = []
     for m in months:
         paychecks = await db.paychecks.find({"month_key": m["key"]}, {"_id": 0}).to_list(50)
@@ -331,6 +406,7 @@ async def list_months():
             "total_buffer": round(total_buffer, 2),
             "paycheck_count": len(paychecks),
             "savings_rate": round((total_saved / total_income * 100) if total_income else 0, 1),
+            "is_template": len(paychecks) == 0,
         })
     return result
 
@@ -513,7 +589,12 @@ async def get_summary():
 
 @api_router.get("/paychecks/{paycheck_id}/savings-recommendation")
 async def savings_recommendation(paycheck_id: str):
-    """Deterministic savings recommendation: after all fixed obligations, suggest 20% of what's left."""
+    """Deterministic savings recommendation based on cash net of aggregated obligations.
+
+    We use the paycheck's aggregated allocation buckets (vehicle, payoffs, current-month bills,
+    next-month bills, living costs). Individual `bills` records are DETAIL LINES already summed
+    into those buckets, so we intentionally do NOT subtract them again (that was the bug that
+    made recommendations return $0)."""
     pc = await db.paychecks.find_one({"id": paycheck_id}, {"_id": 0})
     if not pc:
         raise HTTPException(404, "Paycheck not found")
@@ -523,10 +604,13 @@ async def savings_recommendation(paycheck_id: str):
         pc["vehicle_payment"] + pc["targeted_payoffs"] + pc["current_month_bills"]
         + pc["next_month_early_bills"] + pc["living_costs"]
     )
-    net_after_fixed = max(0.0, pc["total_cash"] - fixed - unpaid_bills_total)
+    net_after_fixed = max(0.0, pc["total_cash"] - fixed)
     conservative = round(net_after_fixed * 0.10, 2)
     balanced = round(net_after_fixed * 0.20, 2)
     aggressive = round(net_after_fixed * 0.35, 2)
+    # Quick preset amounts users typically pick
+    presets = [25, 50, 100, 200, 300, 500]
+    presets = [p for p in presets if p <= net_after_fixed + 0.01]
     return {
         "paycheck_id": paycheck_id,
         "total_cash": pc["total_cash"],
@@ -534,6 +618,7 @@ async def savings_recommendation(paycheck_id: str):
         "unpaid_bills": round(unpaid_bills_total, 2),
         "net_after_obligations": round(net_after_fixed, 2),
         "current_savings_transfer": pc.get("savings_transfer", 0),
+        "presets": presets,
         "recommendations": {
             "conservative": conservative,
             "balanced": balanced,
@@ -612,6 +697,117 @@ async def ai_advice(paycheck_id: str):
     return data
 
 
+# ---------- Savings Goals ----------
+@api_router.get("/goals")
+async def list_goals():
+    goals = await db.savings_goals.find({}, {"_id": 0}).sort("created_at", 1).to_list(200)
+    return goals
+
+
+@api_router.post("/goals")
+async def create_goal(req: CreateGoalReq):
+    g = SavingsGoal(**req.model_dump())
+    doc = g.model_dump()
+    await db.savings_goals.insert_one({**doc})
+    return doc
+
+
+@api_router.patch("/goals/{goal_id}")
+async def update_goal(goal_id: str, req: UpdateGoalReq):
+    updates = {k: v for k, v in req.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(400, "No fields")
+    result = await db.savings_goals.update_one({"id": goal_id}, {"$set": updates})
+    if result.matched_count == 0:
+        raise HTTPException(404, "Goal not found")
+    g = await db.savings_goals.find_one({"id": goal_id}, {"_id": 0})
+    return g
+
+
+@api_router.delete("/goals/{goal_id}")
+async def delete_goal(goal_id: str):
+    result = await db.savings_goals.delete_one({"id": goal_id})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Goal not found")
+    return {"deleted": True}
+
+
+@api_router.post("/goals/{goal_id}/contribute")
+async def contribute_to_goal(goal_id: str, req: ContributeReq):
+    g = await db.savings_goals.find_one({"id": goal_id}, {"_id": 0})
+    if not g:
+        raise HTTPException(404, "Goal not found")
+    new_amount = round(g["current_amount"] + req.amount, 2)
+    await db.savings_goals.update_one({"id": goal_id}, {"$set": {"current_amount": new_amount}})
+    contrib = {
+        "id": str(uuid.uuid4()),
+        "goal_id": goal_id,
+        "amount": req.amount,
+        "note": req.note or "",
+        "at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.goal_contributions.insert_one({**contrib})
+    updated = await db.savings_goals.find_one({"id": goal_id}, {"_id": 0})
+    return {"goal": updated, "contribution": contrib}
+
+
+# ---------- Savings Streak ----------
+@api_router.get("/streak")
+async def savings_streak():
+    """A "savings streak" is the number of consecutive most-recent months (including current)
+    where at least one paycheck had savings_transfer > 0 OR total_saved > 0.
+    Also returns the best (longest) streak in DB history."""
+    months = await db.months.find({}, {"_id": 0}).sort("key", -1).to_list(200)
+    # Build a map month_key -> total_saved
+    month_saved: dict[str, float] = {}
+    for m in months:
+        paychecks = await db.paychecks.find({"month_key": m["key"]}, {"_id": 0}).to_list(50)
+        month_saved[m["key"]] = sum(p.get("savings_transfer", 0) for p in paychecks)
+
+    # Consider months up to the current month (in UTC) to compute the "current" streak
+    now = datetime.now(timezone.utc)
+    current_key = f"{now.year:04d}-{now.month:02d}"
+
+    # Order keys descending starting at current_key or the latest month <= now
+    ordered = sorted(month_saved.keys())  # ascending
+    ordered = [k for k in ordered if k <= current_key]
+    ordered_desc = list(reversed(ordered))
+
+    current_streak = 0
+    for k in ordered_desc:
+        if month_saved.get(k, 0) > 0:
+            current_streak += 1
+        else:
+            break
+
+    # Best streak across all months in DB
+    best = 0
+    running = 0
+    for k in sorted(month_saved.keys()):
+        if month_saved.get(k, 0) > 0:
+            running += 1
+            best = max(best, running)
+        else:
+            running = 0
+
+    # Motivational message
+    total_saved_ytd = sum(month_saved.get(k, 0) for k in month_saved if k.startswith(f"{now.year}-"))
+    if current_streak >= 3:
+        message = f"🔥 {current_streak}-month savings streak — keep it going!"
+    elif current_streak == 0:
+        message = "Set aside anything above $0 this month to start a streak."
+    else:
+        message = f"You're on a {current_streak}-month streak. One more to double it."
+
+    return {
+        "current_streak": current_streak,
+        "best_streak": best,
+        "ytd_saved": round(total_saved_ytd, 2),
+        "message": message,
+        "monthly_saved": [{"key": k, "amount": round(v, 2)} for k, v in sorted(month_saved.items())],
+    }
+
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -651,12 +847,16 @@ async def startup_seed():
                 await db.bills.insert_many([{**d} for d in bill_docs])
             logger.info(f"Seeded {len(months_docs)} months, {len(paycheck_docs)} paychecks, {len(bill_docs)} bills")
         else:
-            # backfill start/end dates on existing seeded paychecks
             for p in SEED_PAYCHECKS:
                 await db.paychecks.update_one(
                     {"month_key": p["month_key"], "number": p["number"], "$or": [{"start_date": None}, {"start_date": {"$exists": False}}]},
                     {"$set": {"start_date": p["start_date"], "end_date": p["end_date"]}},
                 )
+        # Always ensure current year + 2026 have all 12 months (idempotent)
+        this_year = datetime.now(timezone.utc).year
+        await _ensure_year_months(2026)
+        if this_year != 2026:
+            await _ensure_year_months(this_year)
     except Exception as e:
         logger.error(f"Seed failed: {e}")
 

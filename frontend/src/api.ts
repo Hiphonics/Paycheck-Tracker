@@ -27,6 +27,7 @@ export type MonthSummary = {
   total_buffer: number;
   paycheck_count: number;
   savings_rate: number;
+  is_template?: boolean;
 };
 
 export type Paycheck = {
@@ -84,7 +85,28 @@ export type SavingsRec = {
   unpaid_bills: number;
   net_after_obligations: number;
   current_savings_transfer: number;
+  presets: number[];
   recommendations: { conservative: number; balanced: number; aggressive: number };
+};
+
+export type Goal = {
+  id: string;
+  name: string;
+  target_amount: number;
+  current_amount: number;
+  icon: string;
+  color: string;
+  target_date?: string | null;
+  notes?: string;
+  created_at?: string;
+};
+
+export type Streak = {
+  current_streak: number;
+  best_streak: number;
+  ytd_saved: number;
+  message: string;
+  monthly_saved: { key: string; amount: number }[];
 };
 
 export type AIAdvice = {
@@ -97,7 +119,11 @@ export type AIAdvice = {
 
 export const api = {
   seed: () => req<{ seeded: boolean }>("/seed", { method: "POST" }),
-  listMonths: () => req<MonthSummary[]>("/months"),
+  listYears: () => req<{ years: number[] }>("/years"),
+  ensureYear: (year: number) =>
+    req<{ year: number; ok: boolean }>(`/months/ensure-year?year=${year}`, { method: "POST" }),
+  listMonths: (year?: number) =>
+    req<MonthSummary[]>(year != null ? `/months?year=${year}` : "/months"),
   getMonth: (key: string) => req<MonthDetail>(`/months/${key}`),
   getPaycheck: (id: string) => req<PaycheckWithBills>(`/paychecks/${id}`),
   updatePaycheck: (
@@ -137,4 +163,22 @@ export const api = {
   summary: () => req<Summary>("/summary"),
   savingsRec: (paycheckId: string) => req<SavingsRec>(`/paychecks/${paycheckId}/savings-recommendation`),
   aiAdvice: (paycheckId: string) => req<AIAdvice>(`/paychecks/${paycheckId}/ai-advice`, { method: "POST" }),
+  listGoals: () => req<Goal[]>("/goals"),
+  createGoal: (body: {
+    name: string;
+    target_amount: number;
+    icon?: string;
+    color?: string;
+    target_date?: string | null;
+    notes?: string;
+  }) => req<Goal>("/goals", { method: "POST", body: JSON.stringify(body) }),
+  updateGoal: (id: string, body: Partial<Goal>) =>
+    req<Goal>(`/goals/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteGoal: (id: string) => req<{ deleted: boolean }>(`/goals/${id}`, { method: "DELETE" }),
+  contributeGoal: (id: string, amount: number, note?: string) =>
+    req<{ goal: Goal }>(`/goals/${id}/contribute`, {
+      method: "POST",
+      body: JSON.stringify({ amount, note }),
+    }),
+  streak: () => req<Streak>("/streak"),
 };
